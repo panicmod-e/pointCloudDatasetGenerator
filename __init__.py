@@ -12,8 +12,9 @@ bl_info = {
 import bpy
 import random
 import numpy as np
-from mathutils import Vector, Euler
-from math import degrees
+from mathutils import Vector, Euler, Matrix
+from math import degrees, radians
+import time
 
 # GLOBAL VARIABLES
 
@@ -21,7 +22,9 @@ PROPS = [
     ("city_collection", bpy.props.StringProperty(name="City Collection", default="city_generated")),
     ("generator_settings_expanded", bpy.props.BoolProperty(name="Subpanel status", default=True)),
     ("city_settings_expanded", bpy.props.BoolProperty(name="Subpanel status", default=True)),
-    ("object_modifier_tags", bpy.props.StringProperty(name="Object tags", default="Prop,Modifier,instance"))
+    ("object_modifier_tags", bpy.props.StringProperty(name="Object tags", default="Prop, Modifier, instance, building")),
+    ("building_modifier_tags", bpy.props.StringProperty(name="Building tags", default="Modifier, instance, building")),
+    ("object_classes", bpy.props.StringProperty(name="Object classes", default="initial, new, removed, moved, rotated, scaled"))
 ]
 
 
@@ -34,8 +37,10 @@ class DatasetGeneratorScanSettings(bpy.types.PropertyGroup):
     add_objects_min: bpy.props.IntProperty(name="min", default=10, min=0, soft_max=100)
     add_objects_max: bpy.props.IntProperty(name="max", default=20, min=0, soft_max=100)
     rotation_enable: bpy.props.BoolProperty(name="Random rotation", default=True)
-    rotation_min: bpy.props.FloatProperty(name="min", default=1.0, min=0.0, soft_max=180.0, step=10)
-    rotation_max: bpy.props.FloatProperty(name="max", default=10.0, min=0.0, soft_max=180.0, step=10)
+    rotation_min: bpy.props.FloatProperty(name="min", default=1.0, min=0.0, soft_max=5.0, step=1)
+    rotation_max: bpy.props.FloatProperty(name="max", default=10.0, min=0.0, soft_max=15.0, step=1)
+    rotation_objects_min: bpy.props.IntProperty(name="min", default=10, min=0, soft_max=100)
+    rotation_objects_max: bpy.props.IntProperty(name="max", default=20, min=0, soft_max=100)
     rotation_positive_x: bpy.props.BoolProperty(name="+X", default=False)
     rotation_negative_x: bpy.props.BoolProperty(name="-X", default=False)
     rotation_positive_y: bpy.props.BoolProperty(name="+Y", default=False)
@@ -43,8 +48,10 @@ class DatasetGeneratorScanSettings(bpy.types.PropertyGroup):
     rotation_positive_z: bpy.props.BoolProperty(name="+Z", default=True)
     rotation_negative_z: bpy.props.BoolProperty(name="-Z", default=True)
     translation_enable: bpy.props.BoolProperty(name="Random translation", default=True)
-    translation_min: bpy.props.FloatProperty(name="min", default=0.5, min=0.0, soft_max=10.0, step=10)
-    translation_max: bpy.props.FloatProperty(name="max", default=1.5, min=0.0, soft_max=10.0, step=10)
+    translation_min: bpy.props.FloatProperty(name="min", default=0.05, min=0.0, soft_max=0.5, step=0.1)
+    translation_max: bpy.props.FloatProperty(name="max", default=0.1, min=0.0, soft_max=0.5, step=0.1)
+    translation_objects_min: bpy.props.IntProperty(name="min", default=10, min=0, soft_max=100)
+    translation_objects_max: bpy.props.IntProperty(name="max", default=20, min=0, soft_max=100)
     translation_negative_x: bpy.props.BoolProperty(name="-X", default=True)
     translation_positive_x: bpy.props.BoolProperty(name="+X", default=True)
     translation_positive_y: bpy.props.BoolProperty(name="+Y", default=True)
@@ -53,8 +60,10 @@ class DatasetGeneratorScanSettings(bpy.types.PropertyGroup):
     translation_negative_z: bpy.props.BoolProperty(name="-Z", default=True)
     scale_enable: bpy.props.BoolProperty(name="Random scaling", default=True)
     scale_uniform: bpy.props.BoolProperty(name="Uniform scaling", default=True)
-    scale_min: bpy.props.FloatProperty(name="min", default=0.9, min=0.0, soft_min=0.5, soft_max=1.5, step=10)
-    scale_max: bpy.props.FloatProperty(name="max", default=1.1, min=0.0, soft_min=0.5, soft_max=1.5, step=10)
+    scale_min: bpy.props.FloatProperty(name="min", default=0.9, min=0.0, soft_min=0.8, soft_max=1.2, step=1)
+    scale_max: bpy.props.FloatProperty(name="max", default=1.1, min=0.0, soft_min=0.8, soft_max=1.2, step=1)
+    scale_objects_min: bpy.props.IntProperty(name="min", default=10, min=0, soft_max=100)
+    scale_objects_max: bpy.props.IntProperty(name="max", default=20, min=0, soft_max=100)
     scale_x: bpy.props.BoolProperty(name="X", default=True)
     scale_y: bpy.props.BoolProperty(name="Y", default=True)
     scale_z: bpy.props.BoolProperty(name="Z", default=True)
@@ -178,12 +187,12 @@ class DatasetGeneratorCityPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
             subcol = box.column()
             subrow = subcol.row()
             subrow.label(text="City size")
-            subrow.prop(settings, "dimension_x")
-            subrow.prop(settings, "dimension_y")
+            subrow.prop(settings, "dimension_x", slider=True)
+            subrow.prop(settings, "dimension_y", slider=True)
             subrow = subcol.row()
             subrow.label(text="Block size")
-            subrow.prop(settings, "block_min")
-            subrow.prop(settings, "block_max")
+            subrow.prop(settings, "block_min", slider=True)
+            subrow.prop(settings, "block_max", slider=True)
 
         col.separator()
         row = col.row()
@@ -227,22 +236,26 @@ class DatasetGeneratorDatasetPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
             if settings.remove_objects_enable:
                 subrow = subcol.row()
                 subrow.label(text="Objects per scan")
-                subrow.prop(settings, "remove_objects_min")
-                subrow.prop(settings, "remove_objects_max")
+                subrow.prop(settings, "remove_objects_min", slider=True)
+                subrow.prop(settings, "remove_objects_max", slider=True)
 
             subcol.prop(settings, "add_objects_enable")
             if settings.add_objects_enable:
                 subrow = subcol.row()
                 subrow.label(text="Objects per scan")
-                subrow.prop(settings, "add_objects_min")
-                subrow.prop(settings, "add_objects_max")
+                subrow.prop(settings, "add_objects_min", slider=True)
+                subrow.prop(settings, "add_objects_max", slider=True)
 
             subcol.prop(settings, "rotation_enable")
             if settings.rotation_enable:
                 subrow = subcol.row()
                 subrow.label(text="Rotation (degrees)")
-                subrow.prop(settings, "rotation_min")
-                subrow.prop(settings, "rotation_max")
+                subrow.prop(settings, "rotation_min", slider=True)
+                subrow.prop(settings, "rotation_max", slider=True)
+                subrow = subcol.row()
+                subrow.label(text="Objects per scan")
+                subrow.prop(settings, "rotation_objects_min", slider=True)
+                subrow.prop(settings, "rotation_objects_max", slider=True)
                 split = subcol.split(factor=0.25)
                 splitcol = split.column()
                 splitcol.label(text="Rotate along axes")
@@ -259,8 +272,12 @@ class DatasetGeneratorDatasetPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
             if settings.translation_enable:
                 subrow = subcol.row()
                 subrow.label(text="Movement")
-                subrow.prop(settings, "translation_min")
-                subrow.prop(settings, "translation_max")
+                subrow.prop(settings, "translation_min", slider=True)
+                subrow.prop(settings, "translation_max", slider=True)
+                subrow = subcol.row()
+                subrow.label(text="Objects per scan")
+                subrow.prop(settings, "translation_objects_min", slider=True)
+                subrow.prop(settings, "translation_objects_max", slider=True)
                 split = subcol.split(factor=0.25)
                 splitcol = split.column()
                 splitcol.label(text="Move along axes")
@@ -277,8 +294,12 @@ class DatasetGeneratorDatasetPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
             if settings.scale_enable:
                 subrow = subcol.row()
                 subrow.label(text="Scale")
-                subrow.prop(settings, "scale_min")
-                subrow.prop(settings, "scale_max")
+                subrow.prop(settings, "scale_min", slider=True)
+                subrow.prop(settings, "scale_max", slider=True)
+                subrow = subcol.row()
+                subrow.label(text="Objects per scan")
+                subrow.prop(settings, "scale_objects_min", slider=True)
+                subrow.prop(settings, "scale_objects_max", slider=True)
                 split = subcol.split(factor=0.33)
                 splitcol = split.column()
                 splitcol.prop(settings, "scale_uniform")
@@ -339,11 +360,19 @@ def randomize_city_seed(context):
 def reset_city(context):
     city_collection = context.scene.city_collection
     city = bpy.data.collections[city_collection]
-    tags = context.scene.object_modifier_tags.split(",")
+    tags = [tag.strip() for tag in context.scene.object_modifier_tags.split(",")]
     for district in city.children_recursive:
         for obj in district.objects:
             if any(tag in obj.name for tag in tags):
                 obj.hide_viewport = False
+                if (obj.delta_location[:3] != (0.0, 0.0, 0.0) or
+                    obj.delta_rotation_euler[:3] != (0.0, 0.0, 0.0) or
+                    obj.delta_scale[:3] != (1.0, 1.0, 1.0)):
+                    # if any delta transforms are set they switched
+                    reset_transforms(obj)
+                    transforms_to_deltas(obj)
+                for child in obj.children_recursive:
+                    child.hide_viewport = False
 
 def clear_city(context):
     city_collection = context.scene.city_collection
@@ -367,9 +396,9 @@ def bound_city_settings(context):
 
 def configure_scenecity_nodes(context):
     settings = context.scene.city_settings
-    bpy.data.node_groups["PCGeneratorCity"].nodes["Non-overlapping boxes layout"].random_seed = settings.seed
-    bpy.data.node_groups["PCGeneratorCity"].nodes["Non-overlapping boxes layout"].boxes_min_max_size[0] = settings.block_min
-    bpy.data.node_groups["PCGeneratorCity"].nodes["Non-overlapping boxes layout"].boxes_min_max_size[1] = settings.block_max
+    bpy.data.node_groups["PCGeneratorCity"].nodes["grid_layout_generator"].random_seed = settings.seed
+    bpy.data.node_groups["PCGeneratorCity"].nodes["grid_layout_generator"].boxes_min_max_size[0] = settings.block_min
+    bpy.data.node_groups["PCGeneratorCity"].nodes["grid_layout_generator"].boxes_min_max_size[1] = settings.block_max
     bpy.data.node_groups["PCGeneratorCity"].nodes["Grid"].grid_size[0] = settings.dimension_x
     bpy.data.node_groups["PCGeneratorCity"].nodes["Grid"].grid_size[1] = settings.dimension_y
 
@@ -384,6 +413,9 @@ def randomize_buildify_levels(collection, rng):
             nodes = obj.modifiers["GeometryNodes"]
             floors = int(rng.integers(3, 11))
             nodes[nodes.node_group.inputs["Max number of floors"].identifier] = floors
+            # obj.update_tag() tags object to be updated in viewport
+            # otherwise changes in level will not be displayed until
+            # further changes to the object are made
             obj.update_tag()
         except Exception as exception:
             print(exception)
@@ -436,11 +468,70 @@ def remove_objects(settings, objects, rng):
         removed_objects.append(obj)
     return removed_objects
 
+def translate_objects(settings, objects, modified_objects, rng):
+    amount = rng.integers(settings.translation_objects_min, settings.translation_objects_max + 1)
+    possible_translation = [
+        (settings.translation_negative_x, ("x", -1)),
+        (settings.translation_positive_x, ("x", 1)),
+        (settings.translation_negative_y, ("y", -1)),
+        (settings.translation_positive_y, ("y", 1)),
+        (settings.translation_negative_z, ("z", -1)),
+        (settings.translation_positive_z, ("z", 1)),
+        ]
+    enabled_translation = [(axis, direction) for (setting, (axis, direction)) in possible_translation if setting]
+    for _ in range(amount):
+        obj = objects.pop()
+        obj.class_name = "moved"
+        modified_objects.append(obj)
+        axis, direction = rng.choice(enabled_translation)
+        value = rng.uniform(settings.translation_min, settings.translation_max) * int(direction)
+        setattr(obj.location, axis, getattr(obj.location, axis) + value)
+
+def rotate_objects(context, settings, objects, modified_objects, rng):
+    amount = rng.integers(settings.rotation_objects_min, settings.rotation_objects_max + 1)
+    possible_rotations = [
+        (settings.rotation_negative_x, ("X", -1)),
+        (settings.rotation_positive_x, ("X", 1)),
+        (settings.rotation_negative_y, ("Y", -1)),
+        (settings.rotation_positive_y, ("Y", 1)),
+        (settings.rotation_negative_z, ("Z", -1)),
+        (settings.rotation_positive_z, ("Z", 1)),
+    ]
+    enabled_rotations = [(axis, direction) for (setting, (axis, direction)) in possible_rotations if setting]
+    building_tags = context.scene.building_modifier_tags
+    for _ in range(amount):
+        obj = objects.pop()
+        obj.class_name = "rotated"
+        modified_objects.append(obj)
+        axis, direction = rng.choice(enabled_rotations)
+        degrees = rng.uniform(settings.rotation_min, settings.rotation_max) * int(direction)
+        degrees = degrees * 0.1 if any(tag in obj.name for tag in building_tags) else degrees
+        obj.rotation_euler = (obj.rotation_euler.to_matrix() @ Matrix.Rotation(radians(degrees), 3, axis)).to_euler()
+
+def scale_objects(settings, objects, modified_objects, rng):
+    amount = rng.integers(settings.scale_objects_min, settings.scale_objects_max + 1)
+    for _ in range(amount):
+        obj = objects.pop()
+        obj.class_name = "scaled"
+        modified_objects.append(obj)
+        value = rng.uniform(settings.scale_min, settings.scale_max)
+        if settings.scale_uniform:
+            scale = Vector((value, value, value))
+        else:
+            x = value if settings.scale_x else 1.0
+            y = value if settings.scale_y else 1.0
+            z = value if settings.scale_z else 1.0
+            scale = Vector((x, y, z))
+        obj.scale *= scale
+
+
 def post_scan_cleanup(objects, hidden_objects, removed_objects, modified_objects, added_objects):
     for _ in range(len(removed_objects)):
         obj = removed_objects.pop()
         obj.class_name = "initial"
         obj.hide_viewport = True
+        for child in obj.children_recursive:
+            child.hide_viewport = True
         hidden_objects.append(obj)
     for _ in range(len(modified_objects)):
         obj = modified_objects.pop()
@@ -451,10 +542,28 @@ def post_scan_cleanup(objects, hidden_objects, removed_objects, modified_objects
         obj.class_name = "initial"
         objects.append(obj)
 
+# Transfers object transforms to delta transforms and vice versa
+# Using blenders built in operators tends to be much slower in comparison
+def transforms_to_deltas(obj):
+    translation = obj.location.copy()
+    rotation = obj.rotation_euler.copy()
+    scale = obj.scale.copy()
+    obj.location = obj.delta_location
+    obj.rotation_euler = obj.delta_rotation_euler
+    obj.scale = obj.delta_scale
+    obj.delta_location = translation
+    obj.delta_rotation_euler = rotation
+    obj.delta_scale = scale
+
+def reset_transforms(obj):
+    obj.scale[:3] = (1, 1, 1)
+    obj.rotation_euler[:3] = (0, 0, 0)
+    obj.location[:3] = (0, 0, 0)
+
 def build_object_collection(context):
     city_collection = context.scene.city_collection
     objects = []
-    tags = ["Prop", "Modifier", "instance"]
+    tags = [tag.strip() for tag in context.scene.object_modifier_tags.split(",")]
     city = bpy.data.collections[city_collection]
     for district in city.children_recursive:
         props = []
@@ -463,6 +572,7 @@ def build_object_collection(context):
             obj.hide_viewport = False
             if any(tag in obj.name for tag in tags):
                 props.append(obj)
+                transforms_to_deltas(obj)
         props.sort(key=lambda obj: (obj.matrix_world.translation.x, obj.matrix_world.translation.y))
         objects.extend(props)
     return objects
@@ -475,44 +585,61 @@ def build_hidden_object_collection(settings, objects, rng):
         obj = objects.pop()
         hidden_objects.append(obj)
         obj.hide_viewport = True
-        if len(obj.children_recursive):
-            for child in obj.children_recursive:
-                child.hide_viewport = True
+        for child in obj.children_recursive:
+            child.hide_viewport = True
     return hidden_objects
 
 def bound_scan_settings(settings, objects):
-    limit = int(len(objects) / (settings.scans * 2))
+    limit = int(len(objects) / (settings.scans * 3))
     settings.rotation_max = max(settings.rotation_min, settings.rotation_max)
+    settings.rotation_objects_max = min(settings.rotation_objects_max, limit)
+    settings.rotation_objects_min = min(settings.rotation_objects_min, settings.rotation_objects_max)
     settings.translation_max = max(settings.translation_min, settings.translation_max)
+    settings.translation_objects_max = min(settings.translation_objects_max, limit)
+    settings.translation_objects_min = min(settings.translation_objects_min, settings.translation_objects_max)
     settings.scale_max = max(settings.scale_min, settings.scale_max)
+    settings.scale_objects_max = min(settings.scale_objects_max, limit)
+    settings.scale_objects_min = min(settings.scale_objects_min, settings.scale_objects_max)
     settings.add_objects_max = min(settings.add_objects_max, limit)
     settings.add_objects_min = min(settings.add_objects_min, settings.add_objects_max)
     settings.remove_objects_max = min(settings.remove_objects_max, limit)
     settings.remove_objects_min = min(settings.remove_objects_min, settings.remove_objects_max)
 
-def clear_classification():
-    return 0
-
+def create_missing_classes(context):
+    classes = [klass.strip() for klass in context.scene.object_classes.split(",")]
+    pc_classes = context.scene.pointCloudRenderProperties.classes
+    for klass in classes:
+        if klass not in pc_classes:
+            bpy.ops.pcscanner.add_class()
+            classes[-1].name = klass
+            classes[-1].class_id = len(pc_classes) - 1
 
 def run_scans(context):
     settings = context.scene.generator_settings
     scanner = bpy.data.scenes["Scene"].pointCloudRenderProperties.laser_scanners[0]
+    if settings.randomize_seed:
+        randomize_generator_seed(context)
     rng = np.random.default_rng(settings.seed)
     objects = build_object_collection(context)
+    create_missing_classes(context)
     bound_scan_settings(settings, objects)
     hidden_objects = build_hidden_object_collection(settings, objects, rng)
 
     print("-- starting initial scan --")
     scanner.file_path = "//initial_scan.csv"
-    bpy.ops.render.render_point_cloud()
+    # bpy.ops.render.render_point_cloud()
     for _ in range(settings.scans):
         removed_objects = remove_objects(settings, objects, rng)
         modified_objects = []
+        scale_objects(settings, objects, modified_objects, rng)
+        translate_objects(settings, objects, modified_objects, rng)
+        rotate_objects(context, settings, objects, modified_objects, rng)
         added_objects = add_objects(settings, hidden_objects, rng)
         scanner.file_path = "//scan_" + str(_ + 1) + ".csv"
         print("-- starting scan " + str(_ + 1) + " --")
-        bpy.ops.render.render_point_cloud()
+        # bpy.ops.render.render_point_cloud()
         post_scan_cleanup(objects, hidden_objects, removed_objects, modified_objects, added_objects)
+    # reset_city()
 
 
 def register():
@@ -532,6 +659,7 @@ def unregister():
     for klass in CLASSES:
         bpy.utils.unregister_class(klass)
     del bpy.types.Scene.generator_settings
+    del bpy.types.Scene.city_settings
 
 
 if __name__ == "__main__":
