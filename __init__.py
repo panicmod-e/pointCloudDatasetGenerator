@@ -24,7 +24,8 @@ PROPS = [
     ("city_settings_expanded", bpy.props.BoolProperty(name="Subpanel status", default=True)),
     ("object_modifier_tags", bpy.props.StringProperty(name="Object tags", default="Prop, Modifier, instance, building")),
     ("building_modifier_tags", bpy.props.StringProperty(name="Building tags", default="Modifier, instance, building")),
-    ("object_classes", bpy.props.StringProperty(name="Object classes", default="initial, new, removed, moved, rotated, scaled"))
+    ("object_classes", bpy.props.StringProperty(name="Object classes", default="initial, new, removed, moved, rotated, scaled")),
+    ("scanner_path", bpy.props.StringProperty(name="Scanner path", default=""))
 ]
 
 
@@ -80,6 +81,7 @@ class DatasetGeneratorCitySettings(bpy.types.PropertyGroup):
     seed: bpy.props.IntProperty(name="Seed", default=np.random.default_rng().integers(10000, 100000000), min=10000, max=99999999)
     clear_city: bpy.props.BoolProperty(name="Clear existing city", default=True)
     randomize_seed: bpy.props.BoolProperty(name="Randomize seed", default=True)
+    path_seed: bpy.props.IntProperty(name="Seed", default=np.random.default_rng().integers(10000, 100000000), min=10000, max=99999999)
 
 
 # OPERATORS
@@ -101,6 +103,26 @@ class DatasetGeneratorBuildCity(bpy.types.Operator):
 
     def execute(self, context):
         build_city(context)
+
+        return {'FINISHED'}
+
+
+class DatasetGeneratorBuildPath(bpy.types.Operator):
+    bl_idname = "opr.dataset_generator_build_path"
+    bl_label = "Generate Scan Path"
+
+    def execute(self, context):
+        build_path(context)
+
+        return {'FINISHED'}
+
+
+class DatasetGeneratorClearPath(bpy.types.Operator):
+    bl_idname = "opr.dataset_generator_clear_path"
+    bl_label = "Clear Scan Path"
+
+    def execute(self, context):
+        clear_path(context)
 
         return {'FINISHED'}
 
@@ -131,6 +153,16 @@ class DatasetGeneratorScanSeed(bpy.types.Operator):
 
     def execute(self, context):
         randomize_generator_seed(context)
+
+        return {'FINISHED'}
+
+
+class DatasetGeneratorPathSeed(bpy.types.Operator):
+    bl_idname = "opr.dataset_generator_path_seed"
+    bl_label = "Randomize Seed"
+
+    def execute(self, context):
+        randomize_path_seed(context)
 
         return {'FINISHED'}
 
@@ -207,6 +239,24 @@ class DatasetGeneratorCityPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
         split.column()
         splitrow = split.row()
         splitrow.operator("opr.dataset_generator_reset_city", text="Reset city")
+
+
+class DatasetGeneratorScannerPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
+    bl_idname = 'RENDER_PT_DatasetGeneratorScanerPanel'
+    bl_parent_id = bl_parent_id = 'RENDER_PT_DatasetGeneratorPanel'
+    bl_label = 'Scanner Configuration'
+
+    def draw(self, context):
+        settings = context.scene.city_settings
+        layout = self.layout
+        col = layout.column()
+        row = col.row()
+        row.label(text="Path seed")
+        row.prop(settings, "path_seed")
+        row.operator("opr.dataset_generator_path_seed", text="Randomize seed")
+        col.operator("opr.dataset_generator_build_path", text="Generate scanner path")
+        col.operator("opr.dataset_generator_clear_path", text="Clear scanner path")
+
 
 
 class DatasetGeneratorDatasetPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
@@ -323,15 +373,19 @@ class DatasetGeneratorDatasetPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
 CLASSES = [
     DatasetGeneratorPanel,
     DatasetGeneratorCityPanel,
+    DatasetGeneratorScannerPanel,
     DatasetGeneratorDatasetPanel,
     DatasetGeneratorRunScans,
     DatasetGeneratorCitySettings,
     DatasetGeneratorScanSettings,
     DatasetGeneratorBuildCity,
+    DatasetGeneratorBuildPath,
+    DatasetGeneratorClearPath,
     DatasetGeneratorClearCity,
     DatasetGeneratorResetCity,
     DatasetGeneratorScanSeed,
     DatasetGeneratorCitySeed,
+    DatasetGeneratorPathSeed,
 ]
 
 # FUNCTIONS
@@ -356,6 +410,10 @@ def randomize_generator_seed(context):
 def randomize_city_seed(context):
     rng = np.random.default_rng()
     context.scene.city_settings.seed = rng.integers(10000, 100000000)
+
+def randomize_path_seed(context):
+    rng = np.random.default_rng()
+    context.scene.city_settings.path_seed = rng.integers(10000, 100000000)
 
 def reset_city(context):
     city_collection = context.scene.city_collection
@@ -447,6 +505,121 @@ def build_city(context):
         bpy.ops.node.objects_instancer_node_create(source_node_path=node_path)
     randomize_buildify_levels(bpy.data.collections["city_residential"], rng)
 
+def clear_path(context):
+    if context.scene.scanner_path != "":
+        try:
+            bpy.ops.object.select_all(action='DESELECT')
+            bpy.data.objects[context.scene.scanner_path].select_set(True)
+            bpy.ops.object.delete()
+            context.scene.scanner_path = ""
+        except Exception:
+            print(Exception)
+
+def build_adjacency(graph, road_grid):
+    for _, data in graph.items():
+        node_x, node_y = data["location"]
+        neighbours = road_grid[node_x][node_y]["neighbours"]
+        for offset_x, offset_y in neighbours:
+            x = offset_x
+            y = offset_y
+            # changed from while road_grid[node_x + x][node_y + y]["neighbours"] is None:
+            while road_grid[node_x + x][node_y + y]["type"] == "straight":
+                x += offset_x
+                y += offset_y
+            if road_grid[node_x + x][node_y + y]["type"] == "node":
+                data["adjacent_nodes"].append(road_grid[node_x + x][node_y + y]["node"])
+            elif road_grid[node_x + x][node_y + y]["type"] == "leaf":
+                data["adjacent_leaves"].append(road_grid[node_x + x][node_y + y]["node"])
+
+def build_graph(dimension_x, dimension_y, road_grid):
+    graph = {}
+    node = 0
+    for obj in bpy.data.objects["road"].children:
+        obj_x = int(obj.matrix_world.translation.x + float(dimension_x / 2))
+        obj_y = int(obj.matrix_world.translation.y + float(dimension_y / 2))
+        road_grid[obj_x][obj_y]["neighbours"] = []
+        neighbours = 0
+        for x, y in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+            # since bool operators short circuit, e.g. (x and y) => if x == False then x else y, there should be no error here
+            if (0 <= obj_x + x < dimension_x and 0 <= obj_y + y < dimension_y and road_grid[obj_x + x][obj_y + y]):
+                neighbours += 1
+                road_grid[obj_x][obj_y]["neighbours"].append((x, y))
+        if neighbours != 2:
+            type = "node" if neighbours > 2 else "leaf"
+            graph[str(node)] = {"location": (obj_x, obj_y), "type": type, "adjacent_nodes": [], "adjacent_leaves": []}
+            road_grid[obj_x][obj_y]["node"] = str(node)
+            road_grid[obj_x][obj_y]["type"] = type
+            node += 1
+        else:
+            # changed from road_grid[obj_x][obj_y]["neighbours"] = None
+            road_grid[obj_x][obj_y]["type"] = "straight"
+    build_adjacency(graph, road_grid)
+    return graph
+
+def build_road_grid(dimension_x, dimension_y, city_grid):
+    road_grid = [[None for y in range(dimension_y)] for x in range(dimension_x)]
+    for x in range(dimension_x):
+        for y in range(dimension_y):
+            try:
+                city_grid.data[x][y]["road"]
+                road_grid[x][y] = {"location": (x,y)}
+            except:
+                road_grid[x][y] = None
+    return road_grid
+
+def find_paths_from_node(node, graph):
+    paths = []
+    def step(node, path):
+        no_neighbours = True
+        for neighbour in graph[node]["adjacent_nodes"]:
+            if neighbour not in path:
+                step(neighbour, path + [node])
+                no_neighbours = False
+        if no_neighbours and graph[node]["adjacent_leaves"]:
+            for leaf in graph[node]["adjacent_leaves"]:
+                paths.append(path + [node, leaf])
+        else:
+            paths.append(path + [node])
+    step(node, [])
+    return paths
+
+def generate_curve(context, path, graph):
+    context.view_layer.active_layer_collection = context.view_layer.layer_collection
+    bpy.ops.curve.primitive_bezier_curve_add()
+    settings = context.scene.city_settings
+    curve = bpy.data.objects["BezierCurve"]
+    curve.name = "scanner_path"
+    context.scene.scanner_path = curve.name
+    bezier_points = curve.data.splines.active.bezier_points
+    if len(path) - 2 > 0:
+        bezier_points.add(len(path) - 2)
+    offset_x, offset_y = graph[path[0]]["location"]
+    for point, node in zip(bezier_points, path):
+        x, y = graph[node]["location"]
+        x -= offset_x
+        y -= offset_y
+        point.co = Vector((x, y, 0))
+        point.handle_right = point.co.copy()
+        point.handle_left = point.co.copy()
+    curve.location.x = float(offset_x) - (settings.dimension_x / 2)
+    curve.location.y = float(offset_y) - (settings.dimension_y / 2)
+    curve.location.z = 0.1
+
+def build_path(context):
+    clear_path(context)
+    city_grid = bpy.data.node_groups["PCGeneratorCity"].nodes["grid_layout_generator"].get_grid()
+    settings = context.scene.city_settings
+    dimension_x = settings.dimension_x
+    dimension_y = settings.dimension_y
+    road_grid = build_road_grid(dimension_x, dimension_y, city_grid)
+    graph = build_graph(dimension_x, dimension_y, road_grid)
+    nodes = [node for node, _ in graph.items()]
+    node = np.random.default_rng(settings.path_seed).choice(nodes)
+    paths = find_paths_from_node(node, graph)
+    path = max(paths, key=len)
+    generate_curve(context, path, graph)
+    
+
 def add_objects(settings, hidden_objects, rng):
     amount = rng.integers(settings.add_objects_min, settings.add_objects_max + 1)
     added_objects = []
@@ -523,7 +696,6 @@ def scale_objects(settings, objects, modified_objects, rng):
             z = value if settings.scale_z else 1.0
             scale = Vector((x, y, z))
         obj.scale *= scale
-
 
 def post_scan_cleanup(objects, hidden_objects, removed_objects, modified_objects, added_objects):
     for _ in range(len(removed_objects)):
