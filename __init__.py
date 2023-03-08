@@ -4,19 +4,33 @@ bl_info = {
     "blender": (3, 0, 0),
     "category": "Object",
     # optional
-    "version": (0,0,1),
+    "version": (0,1,0),
     "author": "David Schlereth",
     "description": "Addon to automate point cloud dataset creation of a city using the vLiDAR Addon",
 }
 
 import bpy
-import random
 import numpy as np
-from mathutils import Vector, Euler, Matrix
-from math import degrees, radians
+from mathutils import Vector, Matrix
+from math import radians
+from collections import deque
 import time
 
 # GLOBAL VARIABLES
+
+path_method_items = [
+    ('SINGLE', "Single", "Generate single random path"),
+    ('MULTIPLE', "Multiple", "Path from multiple randomly generated paths"),
+    ('DFS', "DFS traversal", "Path from dfs"),
+    ('BFS', "BFS traversal", "Path from bfs"),
+    # ('NEIGHBORS_FROM_NODE', "Multiple from node", "Path with fixed number of neighbors traversed"),
+    # ('ALL_FROM_NODE', "All from node", "Path from all paths starting in random node"),
+]
+
+path_selection_items = [
+    ('LONGEST', "Longest Path", "Select longest of all generated Paths"),
+    ('RANDOM', "Random Path", "Select path randomly from generated"),
+]
 
 PROPS = [
     ("city_collection", bpy.props.StringProperty(name="City Collection", default="city_generated")),
@@ -25,7 +39,6 @@ PROPS = [
     ("object_modifier_tags", bpy.props.StringProperty(name="Object tags", default="Prop, Modifier, instance, building")),
     ("building_modifier_tags", bpy.props.StringProperty(name="Building tags", default="Modifier, instance, building")),
     ("object_classes", bpy.props.StringProperty(name="Object classes", default="initial, new, removed, moved, rotated, scaled")),
-    ("scanner_path", bpy.props.StringProperty(name="Scanner path", default=""))
 ]
 
 
@@ -81,8 +94,16 @@ class DatasetGeneratorCitySettings(bpy.types.PropertyGroup):
     seed: bpy.props.IntProperty(name="Seed", default=np.random.default_rng().integers(10000, 100000000), min=10000, max=99999999)
     clear_city: bpy.props.BoolProperty(name="Clear existing city", default=True)
     randomize_seed: bpy.props.BoolProperty(name="Randomize seed", default=True)
-    path_seed: bpy.props.IntProperty(name="Seed", default=np.random.default_rng().integers(10000, 100000000), min=10000, max=99999999)
 
+
+class DatasetGeneratorScannerSettings(bpy.types.PropertyGroup):
+    path_seed: bpy.props.IntProperty(name="Seed", default=np.random.default_rng().integers(10000, 100000000), min=10000, max=99999999)
+    randomize_path_seed: bpy.props.BoolProperty(name="Randomize seed", default=True)
+    scanner_path: bpy.props.StringProperty(name="Scanner path", default="")
+    path_method: bpy.props.EnumProperty(name="Path generation method", items=path_method_items, default='SINGLE')
+    path_selection: bpy.props.EnumProperty(name="Path selection method", items=path_selection_items, default='LONGEST')
+    path_multiple_amount: bpy.props.IntProperty(name="Amount of paths for multiple", default=10, min=2, soft_max=30)
+    path_neighbor_amount: bpy.props.IntProperty(name="Amount of neighbors", default=2, min=1, max=3)
 
 # OPERATORS
 
@@ -247,16 +268,37 @@ class DatasetGeneratorScannerPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
     bl_label = 'Scanner Configuration'
 
     def draw(self, context):
-        settings = context.scene.city_settings
+        settings = context.scene.scanner_settings
         layout = self.layout
         col = layout.column()
         row = col.row()
         row.label(text="Path seed")
         row.prop(settings, "path_seed")
         row.operator("opr.dataset_generator_path_seed", text="Randomize seed")
-        col.operator("opr.dataset_generator_build_path", text="Generate scanner path")
-        col.operator("opr.dataset_generator_clear_path", text="Clear scanner path")
-
+        box = col.box()
+        boxcol = box.column()
+        boxrow = boxcol.row()
+        boxrow.label(text="Path generation method")
+        boxrow.prop(settings, "path_method", text="")
+        if settings.path_method == 'MULTIPLE':
+            boxrow = boxcol.row()
+            boxrow.label(text="Number of paths")
+            boxrow.prop(settings, "path_multiple_amount", text="")
+        elif settings.path_method == 'NEIGHBORS_FROM_NODE':
+            boxrow = boxcol.row()
+            boxrow.label(text="Neighbors to traverse")
+            boxrow.prop(settings, "path_neighbor_amount", text="")
+        boxrow = boxcol.row()
+        boxrow.label(text="Path Selection")
+        boxrow.prop(settings, "path_selection", text="")
+        row = col.row()
+        row.label(text="Randomize seed")
+        row.prop(settings, "randomize_path_seed")
+        row.operator("opr.dataset_generator_build_path", text="Generate scanner path")
+        split = col.split(factor=0.6725)
+        split.column()
+        splitrow = split.row()
+        splitrow.operator("opr.dataset_generator_clear_path", text="Clear scanner path")
 
 
 class DatasetGeneratorDatasetPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
@@ -378,6 +420,7 @@ CLASSES = [
     DatasetGeneratorRunScans,
     DatasetGeneratorCitySettings,
     DatasetGeneratorScanSettings,
+    DatasetGeneratorScannerSettings,
     DatasetGeneratorBuildCity,
     DatasetGeneratorBuildPath,
     DatasetGeneratorClearPath,
@@ -395,11 +438,11 @@ CLASSES = [
 ## TODO
 ##
 ## report/fix bug in pointCloudScanner scanner.py lines 362, 393
-##
-##
-##
-##
-##
+## create/get laser scanner
+## move/rotate laser scanner to path -> assign path
+## pathfinding options: single path, longest of fixed number, longest of all 2-neigbor paths
+## add scan settings (# scans, path, name...)
+## optional -> laser scanner options in interface (use default for now)
 ##
 ####
 
@@ -413,7 +456,7 @@ def randomize_city_seed(context):
 
 def randomize_path_seed(context):
     rng = np.random.default_rng()
-    context.scene.city_settings.path_seed = rng.integers(10000, 100000000)
+    context.scene.scanner_settings.path_seed = rng.integers(10000, 100000000)
 
 def reset_city(context):
     city_collection = context.scene.city_collection
@@ -506,12 +549,13 @@ def build_city(context):
     randomize_buildify_levels(bpy.data.collections["city_residential"], rng)
 
 def clear_path(context):
-    if context.scene.scanner_path != "":
+    scanner_path = context.scene.scanner_settings.scanner_path
+    if scanner_path != "":
         try:
             bpy.ops.object.select_all(action='DESELECT')
-            bpy.data.objects[context.scene.scanner_path].select_set(True)
+            bpy.data.objects[scanner_path].select_set(True)
             bpy.ops.object.delete()
-            context.scene.scanner_path = ""
+            context.scene.scanner_settings.scanner_path = ""
         except Exception:
             print(Exception)
 
@@ -567,8 +611,11 @@ def build_road_grid(dimension_x, dimension_y, city_grid):
                 road_grid[x][y] = None
     return road_grid
 
-def find_paths_from_node(node, graph):
+def generate_paths(graph, context):
+    settings = context.scene.scanner_settings
+    rng = np.random.default_rng(settings.path_seed)
     paths = []
+
     def step(node, path):
         no_neighbours = True
         for neighbour in graph[node]["adjacent_nodes"]:
@@ -580,16 +627,95 @@ def find_paths_from_node(node, graph):
                 paths.append(path + [node, leaf])
         else:
             paths.append(path + [node])
-    step(node, [])
+
+    def step_limited(node, path, limit):
+        neighbors = [neighbor for neighbor in graph[node]["adjacent_nodes"] if neighbor not in path]
+        leaves = [leaf for leaf in graph[node]["adjacent_leaves"] if leaf not in path]
+        rng.shuffle(neighbors)
+        if neighbors:
+            for _ in range(limit):
+                if neighbors:
+                    neighbor = neighbors.pop()
+                    step_limited(neighbor, path + [node], limit)
+        elif leaves:
+            paths.append(path + [node, rng.choice(leaves)])
+        else:
+            paths.append(path + [node])
+
+    def dfs(node, path):
+        dfs = []
+        dfs.append(node)
+        stack = deque()
+
+        def step_dfs(node, path):
+            dfs.append(node)
+            neighbors = [neighbor for neighbor in graph[node]["adjacent_nodes"] if neighbor not in dfs]
+            rng.shuffle(neighbors)
+            leaves = [leaf for leaf in graph[node]["adjacent_leaves"] if leaf not in dfs]
+            for neighbor in neighbors:
+                stack.append((neighbor, path + [node]))
+            for leaf in leaves:
+                paths.append(path + [node, leaf])
+        
+        neighbors = graph[node]["adjacent_nodes"]
+        leaves = graph[node]["adjacent_leaves"]
+        if neighbors:
+            stack.append((neighbors[0], path + [node]))
+        elif leaves:
+            stack.append((leaves[0], path + [node]))
+        while stack:
+            step_dfs(*stack.pop())
+
+    def bfs(node, path):
+        bfs = []
+        bfs.append(node)
+        queue = deque()
+
+        def step_bfs(node, path):
+            bfs.append(node)
+            neighbors = [neighbor for neighbor in graph[node]["adjacent_nodes"] if neighbor not in bfs]
+            rng.shuffle(neighbors)
+            leaves = [leaf for leaf in graph[node]["adjacent_leaves"] if leaf not in bfs]
+            for neighbor in neighbors:
+                queue.append((neighbor, path + [node]))
+            for leaf in leaves:
+                paths.append(path + [node, leaf])
+
+        neighbors = graph[node]["adjacent_nodes"]
+        leaves = graph[node]["adjacent_leaves"]
+        if neighbors:
+            queue.append((neighbors[0], path + [node]))
+        elif leaves:
+            queue.append((leaves[0], path + [node]))
+        while queue:
+            step_bfs(*queue.popleft())
+
+    nodes = [node for node, _ in graph.items()]
+    node = rng.choice(nodes)
+    while graph[node]["type"] == "node":
+        node = rng.choice(nodes)
+    mode = settings.path_method
+    if mode == 'MULTIPLE':
+        for _ in range(settings.path_multiple_amount):
+            step_limited(node, [], 1)
+    elif mode == 'NEIGHBORS_FROM_NODE':
+        step_limited(node, [], settings.path_neighbor_amount)
+    elif mode == 'ALL_FROM_NODE':
+        step(node, [])
+    elif mode == 'DFS':
+        dfs(node, [])
+    elif mode == 'BFS':
+        bfs(node, [])
+    else:
+        step_limited(node, [], 1)
     return paths
 
 def generate_curve(context, path, graph):
     context.view_layer.active_layer_collection = context.view_layer.layer_collection
     bpy.ops.curve.primitive_bezier_curve_add()
-    settings = context.scene.city_settings
+    city_settings = context.scene.city_settings
     curve = bpy.data.objects["BezierCurve"]
     curve.name = "scanner_path"
-    context.scene.scanner_path = curve.name
     bezier_points = curve.data.splines.active.bezier_points
     if len(path) - 2 > 0:
         bezier_points.add(len(path) - 2)
@@ -601,24 +727,43 @@ def generate_curve(context, path, graph):
         point.co = Vector((x, y, 0))
         point.handle_right = point.co.copy()
         point.handle_left = point.co.copy()
-    curve.location.x = float(offset_x) - (settings.dimension_x / 2)
-    curve.location.y = float(offset_y) - (settings.dimension_y / 2)
+    curve.location.x = float(offset_x) - (city_settings.dimension_x / 2)
+    curve.location.y = float(offset_y) - (city_settings.dimension_y / 2)
     curve.location.z = 0.1
+    context.scene.scanner_settings.scanner_path = curve.name
+
+#####
+#
+#   Thoughts:
+#   - get path by traversing graph like a tree from (random) node as root, save path along the way in each node -> choose one of the longest paths (highest depth)
+#   - limit current path-finding by maximum path length
+#   - choose end point (randomly) and use current path-finding until end point reached
+#   - only recur for one (or limited amount) of adjacent nodes (setting enabled) to limit recursion depth
+#
+#   MEASURE RUNTIME of building graph and finding path separate
+#
+####
 
 def build_path(context):
     clear_path(context)
     city_grid = bpy.data.node_groups["PCGeneratorCity"].nodes["grid_layout_generator"].get_grid()
-    settings = context.scene.city_settings
-    dimension_x = settings.dimension_x
-    dimension_y = settings.dimension_y
+    city_settings = context.scene.city_settings
+    scanner_settings = context.scene.scanner_settings
+    dimension_x = city_settings.dimension_x
+    dimension_y = city_settings.dimension_y
     road_grid = build_road_grid(dimension_x, dimension_y, city_grid)
     graph = build_graph(dimension_x, dimension_y, road_grid)
-    nodes = [node for node, _ in graph.items()]
-    node = np.random.default_rng(settings.path_seed).choice(nodes)
-    paths = find_paths_from_node(node, graph)
-    path = max(paths, key=len)
+    if scanner_settings.randomize_path_seed:
+        randomize_path_seed(context)
+    paths = generate_paths(graph, context)
+    rng = np.random.default_rng(scanner_settings.path_seed)
+    if scanner_settings.path_selection == 'RANDOM':
+        rng.shuffle(paths)
+        path = paths[0]
+    else:
+        path = max(paths, key=len)
+    # path = rng.choice(paths,) if scanner_settings.path_selection == 'RANDOM' else max(paths, key=len)
     generate_curve(context, path, graph)
-    
 
 def add_objects(settings, hidden_objects, rng):
     amount = rng.integers(settings.add_objects_min, settings.add_objects_max + 1)
@@ -822,6 +967,7 @@ def register():
         bpy.utils.register_class(klass)
     bpy.types.Scene.generator_settings = bpy.props.PointerProperty(type=DatasetGeneratorScanSettings)
     bpy.types.Scene.city_settings = bpy.props.PointerProperty(type=DatasetGeneratorCitySettings)
+    bpy.types.Scene.scanner_settings = bpy.props.PointerProperty(type=DatasetGeneratorScannerSettings)
 
 
 def unregister():
@@ -832,6 +978,7 @@ def unregister():
         bpy.utils.unregister_class(klass)
     del bpy.types.Scene.generator_settings
     del bpy.types.Scene.city_settings
+    del bpy.types.Scene.scanner_settings
 
 
 if __name__ == "__main__":
