@@ -4,14 +4,14 @@ bl_info = {
     "blender": (3, 0, 0),
     "category": "Object",
     # optional
-    "version": (0,1,0),
+    "version": (0,2,0),
     "author": "David Schlereth",
     "description": "Addon to automate point cloud dataset creation of a city using the vLiDAR Addon",
 }
 
 import bpy
 import numpy as np
-from mathutils import Vector, Matrix
+from mathutils import Vector, Euler, Matrix
 from math import radians
 from collections import deque
 import time
@@ -34,7 +34,7 @@ path_selection_items = [
 
 PROPS = [
     ("city_collection", bpy.props.StringProperty(name="City Collection", default="city_generated")),
-    ("generator_settings_expanded", bpy.props.BoolProperty(name="Subpanel status", default=True)),
+    ("scan_settings_expanded", bpy.props.BoolProperty(name="Subpanel status", default=True)),
     ("city_settings_expanded", bpy.props.BoolProperty(name="Subpanel status", default=True)),
     ("object_modifier_tags", bpy.props.StringProperty(name="Object tags", default="Prop, Modifier, instance, building")),
     ("building_modifier_tags", bpy.props.StringProperty(name="Building tags", default="Modifier, instance, building")),
@@ -42,8 +42,18 @@ PROPS = [
 ]
 
 
+class DatasetGeneratorDatasetSettings(bpy.types.PropertyGroup):
+    scans: bpy.props.IntProperty(name="Scans", default=4, min=1)
+    scans_directory: bpy.props.StringProperty(name="Output directory", default="//", subtype='DIR_PATH')
+    scans_prefix: bpy.props.StringProperty(name="Prefix for set", default="pcset")
+    scans_new_path: bpy.props.BoolProperty(name="Follow new path each scan", default=False)
+    generate_city: bpy.props.BoolProperty(name="Generate new city (uses existing city if disabled)", default=False)
+    randomize_city_seed: bpy.props.BoolProperty(name="Randomize city seed", default=True)
+    randomize_path_seed: bpy.props.BoolProperty(name="Randomize path seed", default=True)
+    randomize_scan_seed: bpy.props.BoolProperty(name="Randomize scan seed", default=True)
+
+
 class DatasetGeneratorScanSettings(bpy.types.PropertyGroup):
-    scans: bpy.props.IntProperty(name="Scans", default=4)
     remove_objects_enable: bpy.props.BoolProperty(name="Remove objects", default=True)
     remove_objects_min: bpy.props.IntProperty(name="min", default=10, min=0, soft_max=100)
     remove_objects_max: bpy.props.IntProperty(name="max", default=20, min=0, soft_max=100)
@@ -82,7 +92,6 @@ class DatasetGeneratorScanSettings(bpy.types.PropertyGroup):
     scale_y: bpy.props.BoolProperty(name="Y", default=True)
     scale_z: bpy.props.BoolProperty(name="Z", default=True)
     seed: bpy.props.IntProperty(name="Seed", default=np.random.default_rng().integers(10000, 100000000), min=10000, max=99999999)
-    randomize_seed: bpy.props.BoolProperty(name="Randomize seed", default=True)
 
 
 class DatasetGeneratorCitySettings(bpy.types.PropertyGroup):
@@ -100,7 +109,7 @@ class DatasetGeneratorScannerSettings(bpy.types.PropertyGroup):
     path_seed: bpy.props.IntProperty(name="Seed", default=np.random.default_rng().integers(10000, 100000000), min=10000, max=99999999)
     randomize_path_seed: bpy.props.BoolProperty(name="Randomize seed", default=True)
     scanner_path: bpy.props.StringProperty(name="Scanner path", default="")
-    path_method: bpy.props.EnumProperty(name="Path generation method", items=path_method_items, default='SINGLE')
+    path_method: bpy.props.EnumProperty(name="Path generation method", items=path_method_items, default='BFS')
     path_selection: bpy.props.EnumProperty(name="Path selection method", items=path_selection_items, default='LONGEST')
     path_multiple_amount: bpy.props.IntProperty(name="Amount of paths for multiple", default=10, min=2, soft_max=30)
     path_neighbor_amount: bpy.props.IntProperty(name="Amount of neighbors", default=2, min=1, max=3)
@@ -213,7 +222,7 @@ class DatasetGeneratorPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
 
     def draw(self, context):
         col = self.layout.column()
-        col.operator("opr.dataset_generator_run_scans", text="Generate Data Set")
+        col.label(text="Pointcloud Dataset Generator")
 
 
 class DatasetGeneratorCityPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
@@ -301,13 +310,13 @@ class DatasetGeneratorScannerPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
         splitrow.operator("opr.dataset_generator_clear_path", text="Clear scanner path")
 
 
-class DatasetGeneratorDatasetPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
-    bl_idname = 'RENDER_PT_DatasetGeneratorDatasetPanel'
+class DatasetGeneratorSettingsPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
+    bl_idname = 'RENDER_PT_DatasetGeneratorSettingsPanel'
     bl_parent_id = 'RENDER_PT_DatasetGeneratorPanel'
-    bl_label = "Dataset Generation"
+    bl_label = "Dataset Scan Settings"
 
     def draw(self, context):
-        settings = context.scene.generator_settings
+        settings = context.scene.scan_settings
         layout = self.layout
         col = layout.column()
         row = col.row()
@@ -317,11 +326,11 @@ class DatasetGeneratorDatasetPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
 
         col.separator()
         row = col.row()
-        icon = 'DOWNARROW_HLT' if context.scene.generator_settings_expanded else 'RIGHTARROW'
-        row.prop(context.scene, "generator_settings_expanded", icon=icon, icon_only=True)
-        row.label(text="Dataset generation settings")
+        icon = 'DOWNARROW_HLT' if context.scene.scan_settings_expanded else 'RIGHTARROW'
+        row.prop(context.scene, "scan_settings_expanded", icon=icon, icon_only=True)
+        row.label(text="Settings")
 
-        if context.scene.generator_settings_expanded:
+        if context.scene.scan_settings_expanded:
             box = col.box()
             subcol = box.column()
             subcol.prop(settings, "remove_objects_enable")
@@ -402,12 +411,45 @@ class DatasetGeneratorDatasetPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
                     splitrow.prop(settings, "scale_y")
                     splitrow.prop(settings, "scale_z")
 
+
+class DatasetGeneratorDatasetPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
+    bl_idname = 'RENDER_PT_DatasetGeneratorDatasetPanel'
+    bl_parent_id = 'RENDER_PT_DatasetGeneratorPanel'
+    bl_label = "Create Dataset"
+
+    def draw(self, context):
+        dataset_settings = context.scene.dataset_settings
+        scan_settings = context.scene.scan_settings
+        layout = self.layout
+        col = layout.column()
+        box = col.box()
+        boxcol = box.column()
+        boxrow = boxcol.row()
+        boxrow.label(text="Number of scans")
+        boxrow.prop(dataset_settings, "scans", text="")
+        boxrow = boxcol.row()
+        boxrow.label(text="Scan set prefix")
+        boxrow.prop(dataset_settings, "scans_prefix", text="")
+        boxrow = boxcol.row()
+        boxrow.label(text="Output directory")
+        boxrow.prop(dataset_settings, "scans_directory", text="")
+        boxrow = boxcol.row()
+        boxrow.prop(dataset_settings, "randomize_scan_seed")
+        boxrow.prop(dataset_settings, "scans_new_path")
         col.separator()
-        split = col.split(factor=0.33)
-        split.column()
-        splitrow = split.row()
-        splitrow.prop(settings, "randomize_seed")
-        splitrow.operator("opr.dataset_generator_run_scans", text="Run Scans")
+        box = col.box()
+        boxcol = box.column()
+        boxcol.prop(dataset_settings, "generate_city")
+        if dataset_settings.generate_city:
+            boxcol.separator()
+            boxrow = boxcol.row()
+            boxrow.prop(dataset_settings, "randomize_city_seed")
+            boxrow.prop(dataset_settings, "randomize_path_seed")
+        row = col.row()
+        row.label(text="")
+        row.label(text="")
+        row.operator("opr.dataset_generator_run_scans", text="Run Scans")
+        layout.separator()
 
 
 # CLASS COLLECTION
@@ -416,9 +458,11 @@ CLASSES = [
     DatasetGeneratorPanel,
     DatasetGeneratorCityPanel,
     DatasetGeneratorScannerPanel,
+    DatasetGeneratorSettingsPanel,
     DatasetGeneratorDatasetPanel,
     DatasetGeneratorRunScans,
     DatasetGeneratorCitySettings,
+    DatasetGeneratorDatasetSettings,
     DatasetGeneratorScanSettings,
     DatasetGeneratorScannerSettings,
     DatasetGeneratorBuildCity,
@@ -448,7 +492,7 @@ CLASSES = [
 
 def randomize_generator_seed(context):
     rng = np.random.default_rng()
-    context.scene.generator_settings.seed = rng.integers(10000, 100000000)
+    context.scene.scan_settings.seed = rng.integers(10000, 100000000)
 
 def randomize_city_seed(context):
     rng = np.random.default_rng()
@@ -552,9 +596,8 @@ def clear_path(context):
     scanner_path = context.scene.scanner_settings.scanner_path
     if scanner_path != "":
         try:
-            bpy.ops.object.select_all(action='DESELECT')
-            bpy.data.objects[scanner_path].select_set(True)
-            bpy.ops.object.delete()
+            path = bpy.data.objects[scanner_path]
+            bpy.data.objects.remove(path)
             context.scene.scanner_settings.scanner_path = ""
         except Exception:
             print(Exception)
@@ -715,6 +758,13 @@ def generate_paths(graph, context):
     return paths
 
 def generate_curve(context, path, graph):
+    # data = bpy.data.curves.new("scanner_path", type='CURVE')
+    # data.dimensions = '3D'
+    # spline = data.splines.new(type='BEZIER')
+    # spline.bezier_points[0].handle_left_type = 'VECTOR'
+    # spline.bezier_points[0].handle_right_type = 'VECTOR'
+    # obj = bpy.data.objects.new("scanner_path", data)
+    # context.scene.collection.objects.link(obj)
     context.view_layer.active_layer_collection = context.view_layer.layer_collection
     bpy.ops.curve.primitive_bezier_curve_add()
     city_settings = context.scene.city_settings
@@ -729,8 +779,8 @@ def generate_curve(context, path, graph):
         x -= offset_x
         y -= offset_y
         point.co = Vector((x, y, 0))
-        point.handle_right = point.co.copy()
-        point.handle_left = point.co.copy()
+        point.handle_right_type = 'VECTOR'
+        point.handle_left_type = 'VECTOR'
     curve.location.x = float(offset_x) - (city_settings.dimension_x / 2)
     curve.location.y = float(offset_y) - (city_settings.dimension_y / 2)
     curve.location.z = 0.1
@@ -756,6 +806,9 @@ def build_path(context):
         path = max(paths, key=len)
     # path = rng.choice(paths,) if scanner_settings.path_selection == 'RANDOM' else max(paths, key=len)
     generate_curve(context, path, graph)
+    selected_scanner = bpy.context.scene.pointCloudRenderProperties.selected_scanner
+    scanner = bpy.context.scene.pointCloudRenderProperties.laser_scanners[selected_scanner]
+    assign_path_to_scanner(context, scanner)
 
 def add_objects(settings, hidden_objects, rng):
     amount = rng.integers(settings.add_objects_min, settings.add_objects_max + 1)
@@ -886,9 +939,9 @@ def build_object_collection(context):
         objects.extend(props)
     return objects
 
-def build_hidden_object_collection(settings, objects, rng):
+def build_hidden_object_collection(scan_settings, dataset_settings, objects, rng):
     hidden_objects = []
-    amount = settings.scans * settings.add_objects_max
+    amount = dataset_settings.scans * scan_settings.add_objects_max
     rng.shuffle(objects)
     for i in range(amount):
         obj = objects.pop()
@@ -898,21 +951,21 @@ def build_hidden_object_collection(settings, objects, rng):
             child.hide_viewport = True
     return hidden_objects
 
-def bound_scan_settings(settings, objects):
-    limit = int(len(objects) / (settings.scans * 3))
-    settings.rotation_max = max(settings.rotation_min, settings.rotation_max)
-    settings.rotation_objects_max = min(settings.rotation_objects_max, limit)
-    settings.rotation_objects_min = min(settings.rotation_objects_min, settings.rotation_objects_max)
-    settings.translation_max = max(settings.translation_min, settings.translation_max)
-    settings.translation_objects_max = min(settings.translation_objects_max, limit)
-    settings.translation_objects_min = min(settings.translation_objects_min, settings.translation_objects_max)
-    settings.scale_max = max(settings.scale_min, settings.scale_max)
-    settings.scale_objects_max = min(settings.scale_objects_max, limit)
-    settings.scale_objects_min = min(settings.scale_objects_min, settings.scale_objects_max)
-    settings.add_objects_max = min(settings.add_objects_max, limit)
-    settings.add_objects_min = min(settings.add_objects_min, settings.add_objects_max)
-    settings.remove_objects_max = min(settings.remove_objects_max, limit)
-    settings.remove_objects_min = min(settings.remove_objects_min, settings.remove_objects_max)
+def bound_scan_settings(scan_settings, dataset_settings, objects):
+    limit = int(len(objects) / (dataset_settings.scans * 3))
+    scan_settings.rotation_max = max(scan_settings.rotation_min, scan_settings.rotation_max)
+    scan_settings.rotation_objects_max = min(scan_settings.rotation_objects_max, limit)
+    scan_settings.rotation_objects_min = min(scan_settings.rotation_objects_min, scan_settings.rotation_objects_max)
+    scan_settings.translation_max = max(scan_settings.translation_min, scan_settings.translation_max)
+    scan_settings.translation_objects_max = min(scan_settings.translation_objects_max, limit)
+    scan_settings.translation_objects_min = min(scan_settings.translation_objects_min, scan_settings.translation_objects_max)
+    scan_settings.scale_max = max(scan_settings.scale_min, scan_settings.scale_max)
+    scan_settings.scale_objects_max = min(scan_settings.scale_objects_max, limit)
+    scan_settings.scale_objects_min = min(scan_settings.scale_objects_min, scan_settings.scale_objects_max)
+    scan_settings.add_objects_max = min(scan_settings.add_objects_max, limit)
+    scan_settings.add_objects_min = min(scan_settings.add_objects_min, scan_settings.add_objects_max)
+    scan_settings.remove_objects_max = min(scan_settings.remove_objects_max, limit)
+    scan_settings.remove_objects_min = min(scan_settings.remove_objects_min, scan_settings.remove_objects_max)
 
 def create_missing_classes(context):
     classes = [klass.strip() for klass in context.scene.object_classes.split(",")]
@@ -923,32 +976,77 @@ def create_missing_classes(context):
             classes[-1].name = klass
             classes[-1].class_id = len(pc_classes) - 1
 
+def assign_path_to_scanner(context, scanner):
+    scanner_path = context.scene.scanner_settings.scanner_path
+    path_object = bpy.data.objects[scanner_path]
+    scanner.path.path_object = path_object
+    bpy.ops.pcscanner.update_path_length()
+    scanner.scan_duration = scanner.path.length * 2
+    if scanner.scanner_type == "mobile_mapping_scanner":
+        scanner.mobile_mapping_velocity = 0.5
+    elif scanner.scnner_type == "artificial_scanner":
+        scanner.artificial_velocity = 0.5
+    scanner_object = scanner.camera
+    scanner_object.location.xyz = path_object.location.xyz.copy()
+    curve_point_0 = path_object.data.splines.active.bezier_points[0]
+    curve_point_1 = path_object.data.splines.active.bezier_points[1]
+    if curve_point_1.co.x - curve_point_0.co.x != 0:
+        difference = curve_point_1.co.x - curve_point_0.co.x
+        axis = 'Y'
+    elif curve_point_1.co.y - curve_point_0.co.y != 0:
+        difference = curve_point_1.co.y - curve_point_0.co.y
+        axis = 'X'
+    degrees = 75 * (difference / abs(difference))
+    scanner_object.rotation_euler = (Euler((0.0, 0.0, 0.0), 'XYZ').to_matrix() @ Matrix.Rotation(radians(degrees), 3, axis)).to_euler()
+
 def run_scans(context):
-    settings = context.scene.generator_settings
-    scanner = bpy.data.scenes["Scene"].pointCloudRenderProperties.laser_scanners[0]
-    if settings.randomize_seed:
+    reset_city(context)
+    scan_settings = context.scene.scan_settings
+    dataset_settings = context.scene.dataset_settings
+    city_settings = context.scene.city_settings
+    scanner_settings = context.scene.scanner_settings
+    try:
+        selected_scanner = bpy.context.scene.pointCloudRenderProperties.selected_scanner
+        scanner = bpy.context.scene.pointCloudRenderProperties.laser_scanners[selected_scanner]
+    except Exception:
+        print("Could not access selected laser scanner")
+        print(Exception)
+        return
+
+    if dataset_settings.randomize_scan_seed:
         randomize_generator_seed(context)
-    rng = np.random.default_rng(settings.seed)
+
+    if dataset_settings.generate_city:
+        city_settings.randomize_seed = True if dataset_settings.randomize_city_seed else False
+        scanner_settings.randomize_path_seed = True if dataset_settings.randomize_path_seed else False
+        build_city(context)
+        build_path(context)
+
+    rng = np.random.default_rng(scan_settings.seed)
     objects = build_object_collection(context)
     create_missing_classes(context)
-    bound_scan_settings(settings, objects)
-    hidden_objects = build_hidden_object_collection(settings, objects, rng)
+    bound_scan_settings(scan_settings, dataset_settings, objects)
+    hidden_objects = build_hidden_object_collection(scan_settings, dataset_settings, objects, rng)
 
+    file_name = dataset_settings.scans_directory + dataset_settings.scans_prefix + "_scan_"
     print("-- starting initial scan --")
-    scanner.file_path = "//initial_scan.csv"
-    # bpy.ops.render.render_point_cloud()
-    for _ in range(settings.scans):
-        removed_objects = remove_objects(settings, objects, rng)
+    scanner.file_path = file_name + "01.csv"
+    bpy.ops.render.render_point_cloud()
+    for scans in range(dataset_settings.scans):
+        if dataset_settings.scans_new_path:
+            scanner_settings.path_seed = rng.integers(10000, 100000000)
+            build_path(context)
+        removed_objects = remove_objects(scan_settings, objects, rng)
         modified_objects = []
-        scale_objects(settings, objects, modified_objects, rng)
-        translate_objects(settings, objects, modified_objects, rng)
-        rotate_objects(context, settings, objects, modified_objects, rng)
-        added_objects = add_objects(settings, hidden_objects, rng)
-        scanner.file_path = "//scan_" + str(_ + 1) + ".csv"
-        print("-- starting scan " + str(_ + 1) + " --")
-        # bpy.ops.render.render_point_cloud()
+        scale_objects(scan_settings, objects, modified_objects, rng)
+        translate_objects(scan_settings, objects, modified_objects, rng)
+        rotate_objects(context, scan_settings, objects, modified_objects, rng)
+        added_objects = add_objects(scan_settings, hidden_objects, rng)
+        file_suffix = "0" + str(scans + 2) + ".csv" if scans < 8 else str(scans + 2) + ".csv"
+        scanner.file_path = file_name + file_suffix
+        print("-- starting scan " + str(scans + 2) + " --")
+        bpy.ops.render.render_point_cloud()
         post_scan_cleanup(objects, hidden_objects, removed_objects, modified_objects, added_objects)
-    # reset_city()
 
 
 def register():
@@ -957,9 +1055,10 @@ def register():
         setattr(bpy.types.Scene, prop, value)
     for klass in CLASSES:
         bpy.utils.register_class(klass)
-    bpy.types.Scene.generator_settings = bpy.props.PointerProperty(type=DatasetGeneratorScanSettings)
+    bpy.types.Scene.scan_settings = bpy.props.PointerProperty(type=DatasetGeneratorScanSettings)
     bpy.types.Scene.city_settings = bpy.props.PointerProperty(type=DatasetGeneratorCitySettings)
     bpy.types.Scene.scanner_settings = bpy.props.PointerProperty(type=DatasetGeneratorScannerSettings)
+    bpy.types.Scene.dataset_settings = bpy.props.PointerProperty(type=DatasetGeneratorDatasetSettings)
 
 
 def unregister():
@@ -968,9 +1067,10 @@ def unregister():
         delattr(bpy.types.Scene, prop)
     for klass in CLASSES:
         bpy.utils.unregister_class(klass)
-    del bpy.types.Scene.generator_settings
+    del bpy.types.Scene.scan_settings
     del bpy.types.Scene.city_settings
     del bpy.types.Scene.scanner_settings
+    del bpy.types.Scene.dataset_settings
 
 
 if __name__ == "__main__":
