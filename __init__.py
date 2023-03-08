@@ -642,16 +642,16 @@ def generate_paths(graph, context):
         else:
             paths.append(path + [node])
 
-    def dfs(node, path):
-        dfs = []
-        dfs.append(node)
+    def dfs(node):
+        visited = []
+        visited.append(node)
         stack = deque()
 
         def step_dfs(node, path):
-            dfs.append(node)
-            neighbors = [neighbor for neighbor in graph[node]["adjacent_nodes"] if neighbor not in dfs]
+            visited.append(node)
+            neighbors = [neighbor for neighbor in graph[node]["adjacent_nodes"] if neighbor not in visited]
             rng.shuffle(neighbors)
-            leaves = [leaf for leaf in graph[node]["adjacent_leaves"] if leaf not in dfs]
+            leaves = [leaf for leaf in graph[node]["adjacent_leaves"] if leaf not in visited]
             for neighbor in neighbors:
                 stack.append((neighbor, path + [node]))
             for leaf in leaves:
@@ -660,22 +660,24 @@ def generate_paths(graph, context):
         neighbors = graph[node]["adjacent_nodes"]
         leaves = graph[node]["adjacent_leaves"]
         if neighbors:
-            stack.append((neighbors[0], path + [node]))
+            stack.append((neighbors[0], [node]))
         elif leaves:
-            stack.append((leaves[0], path + [node]))
+            stack.append((leaves[0], [node]))
         while stack:
-            step_dfs(*stack.pop())
+            node, path = stack.pop()
+            if node not in visited:
+                step_dfs(node, path)
 
-    def bfs(node, path):
-        bfs = []
-        bfs.append(node)
+    def bfs(node):
+        visited = []
+        visited.append(node)
         queue = deque()
 
         def step_bfs(node, path):
-            bfs.append(node)
-            neighbors = [neighbor for neighbor in graph[node]["adjacent_nodes"] if neighbor not in bfs]
+            visited.append(node)
+            neighbors = [neighbor for neighbor in graph[node]["adjacent_nodes"] if neighbor not in visited]
             rng.shuffle(neighbors)
-            leaves = [leaf for leaf in graph[node]["adjacent_leaves"] if leaf not in bfs]
+            leaves = [leaf for leaf in graph[node]["adjacent_leaves"] if leaf not in visited]
             for neighbor in neighbors:
                 queue.append((neighbor, path + [node]))
             for leaf in leaves:
@@ -684,11 +686,13 @@ def generate_paths(graph, context):
         neighbors = graph[node]["adjacent_nodes"]
         leaves = graph[node]["adjacent_leaves"]
         if neighbors:
-            queue.append((neighbors[0], path + [node]))
+            queue.append((neighbors[0], [node]))
         elif leaves:
-            queue.append((leaves[0], path + [node]))
+            queue.append((leaves[0], [node]))
         while queue:
-            step_bfs(*queue.popleft())
+            node, path = queue.popleft()
+            if node not in visited:
+                step_bfs(node, path)
 
     nodes = [node for node, _ in graph.items()]
     node = rng.choice(nodes)
@@ -703,9 +707,9 @@ def generate_paths(graph, context):
     elif mode == 'ALL_FROM_NODE':
         step(node, [])
     elif mode == 'DFS':
-        dfs(node, [])
+        dfs(node)
     elif mode == 'BFS':
-        bfs(node, [])
+        bfs(node)
     else:
         step_limited(node, [], 1)
     return paths
@@ -731,18 +735,6 @@ def generate_curve(context, path, graph):
     curve.location.y = float(offset_y) - (city_settings.dimension_y / 2)
     curve.location.z = 0.1
     context.scene.scanner_settings.scanner_path = curve.name
-
-#####
-#
-#   Thoughts:
-#   - get path by traversing graph like a tree from (random) node as root, save path along the way in each node -> choose one of the longest paths (highest depth)
-#   - limit current path-finding by maximum path length
-#   - choose end point (randomly) and use current path-finding until end point reached
-#   - only recur for one (or limited amount) of adjacent nodes (setting enabled) to limit recursion depth
-#
-#   MEASURE RUNTIME of building graph and finding path separate
-#
-####
 
 def build_path(context):
     clear_path(context)
