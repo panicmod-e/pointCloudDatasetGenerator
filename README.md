@@ -1,6 +1,6 @@
 # Point Cloud Dataset Generator Blender Plugin
 
-This Blender plugin was developed during the seminary project "Introduction to Image and Video Processing Techniques". The intended usage of the plugin is to make use of the [vLiDAR scanner plugin](https://github.com/justus-hildebrand/pointCloudRender) by J. Hildebrand to create synthetic point cloud datasets of a city at different timestamps.
+This Blender plugin was developed during the seminary project "Introduction to Image and Video Processing Techniques" at the Hasso Plattner Institute. The intended usage of the plugin is to make use of the [vLiDAR scanner plugin](https://github.com/justus-hildebrand/pointCloudRender) by J. Hildebrand to create synthetic point cloud datasets of a city at different timestamps.
 
 The plugin makes use of the [SceneCity Blender plugin](https://www.cgchan.com/store/scenecity) for procedural city generation, and provides automation for city generation, scan path generation and point cloud scan generation, along with modifications in between scans of the same set to simulate changes in the scene at different timestamps.
 
