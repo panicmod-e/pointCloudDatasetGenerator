@@ -1,20 +1,20 @@
-bl_info = {
-    # required
-    "name": "Dataset Generator",
-    "blender": (3, 0, 0),
-    "category": "Object",
-    # optional
-    "version": (0,5,0),
-    "author": "David Schlereth",
-    "description": "Addon to automate point cloud dataset creation of a city using the vLiDAR Addon",
-}
-
 import bpy
 import numpy as np
 from mathutils import Vector, Euler, Matrix
 from math import radians
 from collections import deque
 import time
+
+bl_info = {
+    # required
+    "name": "Dataset Generator",
+    "blender": (3, 0, 0),
+    "category": "Object",
+    # optional
+    "version": (0,5,5),
+    "author": "David Schlereth",
+    "description": "Addon to automate point cloud dataset creation of a city using the vLiDAR Addon",
+}
 
 # ---------------------------------------------------------------- #
 #                      GLOBAL PROPERTIES
@@ -52,7 +52,9 @@ PROPS = [
     ("object_modifier_tags", bpy.props.StringProperty(name="Object tags", default="prop, building, Prop, Building")),
     ("building_modifier_tags", bpy.props.StringProperty(name="Building tags", default="building")),
     ("buildify_building_modifier_tags", bpy.props.StringProperty(name="Buildify tags", default="buildify_building")),
-    ("object_classes", bpy.props.StringProperty(name="Object classes", default="initial, new, removed, moved, rotated, scaled")),
+    ("object_classes", bpy.props.StringProperty(
+        name="Object classes",
+        default="initial, new, removed, moved, rotated, scaled")),
 ]
 
 
@@ -107,7 +109,11 @@ class DatasetGeneratorScanSettings(bpy.types.PropertyGroup):
     scale_x: bpy.props.BoolProperty(name="X", default=True)
     scale_y: bpy.props.BoolProperty(name="Y", default=True)
     scale_z: bpy.props.BoolProperty(name="Z", default=True)
-    seed: bpy.props.IntProperty(name="Seed", default=np.random.default_rng().integers(10000, 100000000), min=10000, max=99999999)
+    seed: bpy.props.IntProperty(
+        name="Seed",
+        default=np.random.default_rng().integers(10000, 100000000),
+        min=10000,
+        max=99999999)
 
 
 # property group for all settings for city generation
@@ -119,14 +125,21 @@ class DatasetGeneratorCitySettings(bpy.types.PropertyGroup):
     block_max: bpy.props.IntProperty(name="max", default=6, min=1, soft_max=15)
     # list of districts to be generated
     districts: bpy.props.StringProperty(name="Districts", default="residential, commercial, park")
-    seed: bpy.props.IntProperty(name="Seed", default=np.random.default_rng().integers(10000, 100000000), min=10000, max=99999999)
+    seed: bpy.props.IntProperty(
+        name="Seed",
+        default=np.random.default_rng().integers(10000, 100000000),
+        min=10000,
+        max=99999999)
     clear_city: bpy.props.BoolProperty(name="Clear existing city", default=True)
     randomize_seed: bpy.props.BoolProperty(name="Randomize seed", default=True)
 
 
 # property group for all settings for scanner path generation
 class DatasetGeneratorScannerSettings(bpy.types.PropertyGroup):
-    path_seed: bpy.props.IntProperty(name="Seed", default=np.random.default_rng().integers(10000, 100000000), min=10000, max=99999999)
+    path_seed: bpy.props.IntProperty(
+        name="Seed", default=np.random.default_rng().integers(10000, 100000000),
+        min=10000,
+        max=99999999)
     randomize_path_seed: bpy.props.BoolProperty(name="Randomize seed", default=True)
     scanner_path: bpy.props.StringProperty(name="Scanner path", default="")
     placeholder_path: bpy.props.StringProperty(name="Placeholder scanner path", default="")
@@ -143,7 +156,6 @@ class DatasetGeneratorScannerSettings(bpy.types.PropertyGroup):
 # Section for operator class definitions
 #
 # ---------------------------------------------------------------- #
-
 
 
 class DatasetGeneratorRunScans(bpy.types.Operator):
@@ -264,7 +276,7 @@ class DatasetGeneratorPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
 
 class DatasetGeneratorCityPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
     bl_idname = 'RENDER_PT_DatasetGeneratorCityPanel'
-    bl_parent_id ='RENDER_PT_DatasetGeneratorPanel'
+    bl_parent_id = 'RENDER_PT_DatasetGeneratorPanel'
     bl_label = "City Generation"
 
     def draw(self, context):
@@ -450,7 +462,6 @@ class DatasetGeneratorDatasetPanel(DatasetGeneratorBasePanel, bpy.types.Panel):
 
     def draw(self, context):
         dataset_settings = context.scene.dataset_settings
-        scan_settings = context.scene.scan_settings
         layout = self.layout
         col = layout.column()
         box = col.box()
@@ -524,13 +535,16 @@ CLASSES = [
 #
 # ---------------------------------------------------------------- #
 
+
 def randomize_generator_seed(context):
     rng = np.random.default_rng()
     context.scene.scan_settings.seed = rng.integers(10000, 100000000)
 
+
 def randomize_city_seed(context):
     rng = np.random.default_rng()
     context.scene.city_settings.seed = rng.integers(10000, 100000000)
+
 
 def randomize_path_seed(context):
     rng = np.random.default_rng()
@@ -539,6 +553,7 @@ def randomize_path_seed(context):
 # ------------------------------------- #
 #            City Generation
 # ------------------------------------- #
+
 
 def reset_city(context):
     # resets transformations made to city objects
@@ -553,14 +568,15 @@ def reset_city(context):
         for obj in district.objects:
             if any(tag in obj.name for tag in tags):
                 obj.hide_viewport = False
-                if (obj.delta_location[:3] != (0.0, 0.0, 0.0) or
-                    obj.delta_rotation_euler[:3] != (0.0, 0.0, 0.0) or
-                    obj.delta_scale[:3] != (1.0, 1.0, 1.0)):
+                if (obj.delta_location[:3] != (0.0, 0.0, 0.0)
+                        or obj.delta_rotation_euler[:3] != (0.0, 0.0, 0.0)
+                        or obj.delta_scale[:3] != (1.0, 1.0, 1.0)):
                     # if any delta transforms are set they are switched
                     reset_transforms(obj)
                     transforms_to_deltas(obj)
                 for child in obj.children_recursive:
                     child.hide_viewport = False
+
 
 def clear_city(context):
     # removes all objects and collections created during city generation
@@ -579,9 +595,11 @@ def clear_city(context):
     except Exception:
         return
 
+
 def bound_city_settings(context):
     settings = context.scene.city_settings
     settings.block_max = max(settings.block_min, settings.block_max)
+
 
 def configure_scenecity_nodes(context):
     # applies any relevant settings set in ui to relevant scenecity nodes
@@ -593,13 +611,15 @@ def configure_scenecity_nodes(context):
     bpy.data.node_groups["PCGeneratorCity"].nodes["Grid"].grid_size[0] = settings.dimension_x
     bpy.data.node_groups["PCGeneratorCity"].nodes["Grid"].grid_size[1] = settings.dimension_y
 
+
 def randomize_buildify_levels(context, city, rng):
     # randomizes the floors of buildify buildings, otherwise all buildify buildings would be the same height
     buildings = []
     tags = context.scene.buildify_building_modifier_tags
     # this section collects all tagged buildings in a list which is then sorted by object location
     # this step is necessary to make the city generation (specifically assigning the building floors) deterministic
-    # since SceneCity itself does not seem to name or place the buildings in a deterministic order based on the seed used
+    # since SceneCity itself does not seem to name or place the buildings
+    # in a deterministic order based on the seed used
     for district in city.children:
         for obj in district.objects:
             if any(tag in obj.name for tag in tags):
@@ -614,8 +634,9 @@ def randomize_buildify_levels(context, city, rng):
             # otherwise changes in level will not be displayed until
             # further changes to the object are made
             obj.update_tag()
-        except Exception as exception:
+        except Exception:
             None
+
 
 def build_city(context):
     start = time.time()
@@ -653,6 +674,7 @@ def build_city(context):
 #         Scan Path Generation
 # ------------------------------------- #
 
+
 def generate_placeholder_path(context):
     # Due to how the vLiDAR scanner is implemented simply unassigning the scanner path
     # is not supported. To cleanly delete the created scanner path this function
@@ -673,6 +695,7 @@ def generate_placeholder_path(context):
         context.scene.collection.objects.link(placeholder_path)
         settings.placeholder_path = path_name
 
+
 def clear_path(context):
     scanner_path = context.scene.scanner_settings.scanner_path
     if scanner_path != "":
@@ -690,6 +713,7 @@ def clear_path(context):
             context.scene.scanner_settings.scanner_path = ""
         except Exception:
             return
+
 
 def build_adjacency(graph, road_grid):
     # Builds adjacency lists for each graph node.
@@ -709,6 +733,7 @@ def build_adjacency(graph, road_grid):
             elif road_grid[node_x + x][node_y + y]["type"] == "leaf":
                 data["adjacent_leaves"].append(road_grid[node_x + x][node_y + y]["node"])
 
+
 def build_graph(dimension_x, dimension_y, road_grid):
     # builds the initial graph from the road_grid
     graph = {}
@@ -721,8 +746,10 @@ def build_graph(dimension_x, dimension_y, road_grid):
         road_grid[obj_x][obj_y]["neighbours"] = []
         neighbours = 0
         for x, y in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-            # checks adjacent cells if they contain a road portion, if so the direction is marked as containing a neighbor
-            # since bool operators short circuit, e.g. (x and y) => if x == False then x else y, there should be no error here
+            # checks adjacent cells if they contain a road portion,
+            # if so the direction is marked as containing a neighbor
+            # since bool operators short circuit, e.g. (x and y) => if x == False
+            # then x else y, there should be no error here
             if (0 <= obj_x + x < dimension_x and 0 <= obj_y + y < dimension_y and road_grid[obj_x + x][obj_y + y]):
                 neighbours += 1
                 road_grid[obj_x][obj_y]["neighbours"].append((x, y))
@@ -740,6 +767,7 @@ def build_graph(dimension_x, dimension_y, road_grid):
     build_adjacency(graph, road_grid)
     return graph
 
+
 def build_road_grid(dimension_x, dimension_y, city_grid):
     # traverses scenecity grid and creates grid containing all road portions without districts
     road_grid = [[None for y in range(dimension_y)] for x in range(dimension_x)]
@@ -750,9 +778,10 @@ def build_road_grid(dimension_x, dimension_y, city_grid):
                 # the try-except block makes use of an exception to detect road portions
                 city_grid.data[x][y]["road"]
                 road_grid[x][y] = {"location": (x,y)}
-            except:
+            except Exception:
                 road_grid[x][y] = None
     return road_grid
+
 
 def generate_paths(graph, context):
     # generates path(s) from road graph using selected method
@@ -868,6 +897,7 @@ def generate_paths(graph, context):
         step_limited(node, [], 1)
     return paths
 
+
 def generate_curve(context, path, graph):
     # generates a new bezier curve for the newly generated path through the city
     context.view_layer.active_layer_collection = context.view_layer.layer_collection
@@ -893,6 +923,7 @@ def generate_curve(context, path, graph):
     curve.location.y = float(offset_y) - (city_settings.dimension_y / 2)
     curve.location.z = 0.1
     context.scene.scanner_settings.scanner_path = curve.name
+
 
 def assign_path_to_scanner(context, scanner):
     # assigns newly generated bezier curve to vLiDAR scanner
@@ -926,7 +957,9 @@ def assign_path_to_scanner(context, scanner):
     degrees = 75 * (difference / abs(difference))
     # rotation is achieved using matrix rotation and multiplication provided by Blenders mathutils library
     # the result is then converted to Euler and assigned to the scanner object as the new Euler rotation
-    scanner_object.rotation_euler = (Euler((0.0, 0.0, 0.0), 'XYZ').to_matrix() @ Matrix.Rotation(radians(degrees), 3, axis)).to_euler()
+    scanner_object.rotation_euler = (
+        Euler((0.0, 0.0, 0.0), 'XYZ').to_matrix() @ Matrix.Rotation(radians(degrees), 3, axis)).to_euler()
+
 
 def build_path(context):
     clear_path(context)
@@ -955,6 +988,7 @@ def build_path(context):
 #       Scan Generation/Automation
 # ------------------------------------- #
 
+
 def add_objects(settings, hidden_objects, rng):
     # adds new objects to scene by revealing a number of hidden objects in the viewport
     # added objects are classified as "new", removed from hidden_objects list and
@@ -972,6 +1006,7 @@ def add_objects(settings, hidden_objects, rng):
         added_objects.append(obj)
     return added_objects
 
+
 def remove_objects(settings, objects, rng):
     # objects are classified as removed and moved to separate list, which is then returned
     amount = rng.integers(settings.remove_objects_min, settings.remove_objects_max + 1)
@@ -981,6 +1016,7 @@ def remove_objects(settings, objects, rng):
         obj.class_name = "removed"
         removed_objects.append(obj)
     return removed_objects
+
 
 def translate_objects(settings, objects, modified_objects, rng):
     # moves random number (amount) of objects in a single random direction
@@ -993,7 +1029,7 @@ def translate_objects(settings, objects, modified_objects, rng):
         (settings.translation_positive_y, ("y", 1)),
         (settings.translation_negative_z, ("z", -1)),
         (settings.translation_positive_z, ("z", 1)),
-        ]
+    ]
     # builds a list of all directions that are enabled in the settings along which an object can be moved
     enabled_translation = [(axis, direction) for (setting, (axis, direction)) in possible_translation if setting]
     for _ in range(amount):
@@ -1004,6 +1040,7 @@ def translate_objects(settings, objects, modified_objects, rng):
         value = rng.uniform(settings.translation_min, settings.translation_max) * int(direction)
         # moving the object by making use of getattr and setattr for easier access to a specific axis
         setattr(obj.location, axis, getattr(obj.location, axis) + value)
+
 
 def rotate_objects(context, settings, objects, modified_objects, rng):
     # rotates a number (amount) of objects along a single random axis/direction
@@ -1031,6 +1068,7 @@ def rotate_objects(context, settings, objects, modified_objects, rng):
         # by Blenders mathutils library, the resulting Euler is then assigned to the object
         obj.rotation_euler = (obj.rotation_euler.to_matrix() @ Matrix.Rotation(radians(degrees), 3, axis)).to_euler()
 
+
 def scale_objects(settings, objects, modified_objects, rng):
     # scales a number (amount) of objects either uniformly or along the axes enabled in the settings
     amount = rng.integers(settings.scale_objects_min, settings.scale_objects_max + 1)
@@ -1047,6 +1085,7 @@ def scale_objects(settings, objects, modified_objects, rng):
             z = value if settings.scale_z else 1.0
             scale = Vector((x, y, z))
         obj.scale *= scale
+
 
 def post_scan_cleanup(objects, hidden_objects, removed_objects, modified_objects, added_objects):
     # resets object classifications, hides removed objects in viewport
@@ -1068,6 +1107,7 @@ def post_scan_cleanup(objects, hidden_objects, removed_objects, modified_objects
         obj.class_name = "initial"
         objects.append(obj)
 
+
 def transforms_to_deltas(obj):
     # Transfers object transforms to delta transforms and vice versa
     # Using blenders built in operators tends to be much slower in comparison
@@ -1081,10 +1121,12 @@ def transforms_to_deltas(obj):
     obj.delta_rotation_euler = rotation
     obj.delta_scale = scale
 
+
 def reset_transforms(obj):
     obj.scale[:3] = (1, 1, 1)
     obj.rotation_euler[:3] = (0, 0, 0)
     obj.location[:3] = (0, 0, 0)
+
 
 def build_object_collection(context):
     # builds object list of all buildings and props that can receive modifications between scans
@@ -1111,6 +1153,7 @@ def build_object_collection(context):
         objects.extend(props)
     return objects
 
+
 def build_hidden_object_collection(scan_settings, dataset_settings, objects, rng):
     # initial list of objects hidden from the city, these can later be added/revealed
     hidden_objects = []
@@ -1124,6 +1167,7 @@ def build_hidden_object_collection(scan_settings, dataset_settings, objects, rng
             child.hide_viewport = True
     return hidden_objects
 
+
 def bound_scan_settings(scan_settings, dataset_settings, objects):
     limit = int(len(objects) / (dataset_settings.scans * 3))
     scan_settings.rotation_max = max(scan_settings.rotation_min, scan_settings.rotation_max)
@@ -1131,7 +1175,9 @@ def bound_scan_settings(scan_settings, dataset_settings, objects):
     scan_settings.rotation_objects_min = min(scan_settings.rotation_objects_min, scan_settings.rotation_objects_max)
     scan_settings.translation_max = max(scan_settings.translation_min, scan_settings.translation_max)
     scan_settings.translation_objects_max = min(scan_settings.translation_objects_max, limit)
-    scan_settings.translation_objects_min = min(scan_settings.translation_objects_min, scan_settings.translation_objects_max)
+    scan_settings.translation_objects_min = min(
+        scan_settings.translation_objects_min,
+        scan_settings.translation_objects_max)
     scan_settings.scale_max = max(scan_settings.scale_min, scan_settings.scale_max)
     scan_settings.scale_objects_max = min(scan_settings.scale_objects_max, limit)
     scan_settings.scale_objects_min = min(scan_settings.scale_objects_min, scan_settings.scale_objects_max)
@@ -1139,6 +1185,7 @@ def bound_scan_settings(scan_settings, dataset_settings, objects):
     scan_settings.add_objects_min = min(scan_settings.add_objects_min, scan_settings.add_objects_max)
     scan_settings.remove_objects_max = min(scan_settings.remove_objects_max, limit)
     scan_settings.remove_objects_min = min(scan_settings.remove_objects_min, scan_settings.remove_objects_max)
+
 
 def create_missing_classes(context):
     # creates vLiDAR classes required for classification of objects
@@ -1150,6 +1197,7 @@ def create_missing_classes(context):
             bpy.ops.pcscanner.add_class()
             pc_classes[-1].name = klass
             pc_classes[-1].class_id = len(pc_classes) - 1
+
 
 def run_scans(context):
     reset_city(context)
@@ -1190,17 +1238,28 @@ def run_scans(context):
             build_path(context)
         # random access is achieved by shuffling the list and popping the last element(s)
         rng.shuffle(objects)
-        removed_objects = remove_objects(scan_settings, objects, rng)
+
+        removed_objects = []
+        added_objects = []
         modified_objects = []
-        scale_objects(scan_settings, objects, modified_objects, rng)
-        translate_objects(scan_settings, objects, modified_objects, rng)
-        rotate_objects(context, scan_settings, objects, modified_objects, rng)
-        added_objects = add_objects(scan_settings, hidden_objects, rng)
+
+        if scan_settings.remove_objects_enable:
+            removed_objects = remove_objects(scan_settings, objects, rng)
+        if scan_settings.scale_enable:
+            scale_objects(scan_settings, objects, modified_objects, rng)
+        if scan_settings.translation_enable:
+            translate_objects(scan_settings, objects, modified_objects, rng)
+        if scan_settings.rotation_enable:
+            rotate_objects(context, scan_settings, objects, modified_objects, rng)
+        if scan_settings.add_objects_enable:
+            added_objects = add_objects(scan_settings, hidden_objects, rng)
+
         file_suffix = "0" + str(scans + 2) + ".csv" if scans < 8 else str(scans + 2) + ".csv"
         scanner.file_path = file_name + file_suffix
         print("-- starting scan " + str(scans + 2) + " --")
         bpy.ops.render.render_point_cloud()
         post_scan_cleanup(objects, hidden_objects, removed_objects, modified_objects, added_objects)
+
 
 # ------------------------------------- #
 #          Plugin Registration
