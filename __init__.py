@@ -11,7 +11,7 @@ bl_info = {
     "blender": (3, 0, 0),
     "category": "Object",
     # optional
-    "version": (0,5,5),
+    "version": (0, 6, 0),
     "author": "David Schlereth",
     "description": "Addon to automate point cloud dataset creation of a city using the vLiDAR Addon",
 }
@@ -52,9 +52,11 @@ PROPS = [
     ("object_modifier_tags", bpy.props.StringProperty(name="Object tags", default="prop, building, Prop, Building")),
     ("building_modifier_tags", bpy.props.StringProperty(name="Building tags", default="building")),
     ("buildify_building_modifier_tags", bpy.props.StringProperty(name="Buildify tags", default="buildify_building")),
-    ("object_classes", bpy.props.StringProperty(
-        name="Object classes",
-        default="initial, new, removed, moved, rotated, scaled")),
+    # list of supported/required change states that need to be supplied by pointCloudRender plugin
+    # represented as comma-separated string
+    ("required_change_states", bpy.props.StringProperty(
+        name="Available object change states",
+        default="rotated, translated, scaled, added, removed")),
 ]
 
 
@@ -777,7 +779,7 @@ def build_road_grid(dimension_x, dimension_y, city_grid):
                 # since scenecity denotes roads and districts differently in its grid
                 # the try-except block makes use of an exception to detect road portions
                 city_grid.data[x][y]["road"]
-                road_grid[x][y] = {"location": (x,y)}
+                road_grid[x][y] = {"location": (x, y)}
             except Exception:
                 road_grid[x][y] = None
     return road_grid
@@ -836,7 +838,7 @@ def generate_paths(graph, context):
                 stack.append((neighbor, path + [node]))
             for leaf in leaves:
                 paths.append(path + [node, leaf])
-        
+
         neighbors = graph[node]["adjacent_nodes"]
         leaves = graph[node]["adjacent_leaves"]
         if neighbors:
@@ -1002,7 +1004,7 @@ def add_objects(settings, hidden_objects, rng):
         obj.hide_viewport = False
         for child in obj.children_recursive:
             child.hide_viewport = False
-        obj.class_name = "new"
+        obj.object_change_state.added = True
         added_objects.append(obj)
     return added_objects
 
@@ -1013,7 +1015,7 @@ def remove_objects(settings, objects, rng):
     removed_objects = []
     for _ in range(amount):
         obj = objects.pop()
-        obj.class_name = "removed"
+        obj.object_change_state.removed = True
         removed_objects.append(obj)
     return removed_objects
 
@@ -1034,7 +1036,7 @@ def translate_objects(settings, objects, modified_objects, rng):
     enabled_translation = [(axis, direction) for (setting, (axis, direction)) in possible_translation if setting]
     for _ in range(amount):
         obj = objects.pop()
-        obj.class_name = "moved"
+        obj.object_change_state.translated = True
         modified_objects.append(obj)
         axis, direction = rng.choice(enabled_translation)
         value = rng.uniform(settings.translation_min, settings.translation_max) * int(direction)
@@ -1058,7 +1060,7 @@ def rotate_objects(context, settings, objects, modified_objects, rng):
     building_tags = context.scene.building_modifier_tags
     for _ in range(amount):
         obj = objects.pop()
-        obj.class_name = "rotated"
+        obj.object_change_state.rotated = True
         modified_objects.append(obj)
         axis, direction = rng.choice(enabled_rotations)
         degrees = rng.uniform(settings.rotation_min, settings.rotation_max) * int(direction)
@@ -1074,7 +1076,7 @@ def scale_objects(settings, objects, modified_objects, rng):
     amount = rng.integers(settings.scale_objects_min, settings.scale_objects_max + 1)
     for _ in range(amount):
         obj = objects.pop()
-        obj.class_name = "scaled"
+        obj.object_change_state.scaled = True
         modified_objects.append(obj)
         value = rng.uniform(settings.scale_min, settings.scale_max)
         if settings.scale_uniform:
@@ -1087,24 +1089,25 @@ def scale_objects(settings, objects, modified_objects, rng):
         obj.scale *= scale
 
 
-def post_scan_cleanup(objects, hidden_objects, removed_objects, modified_objects, added_objects):
+def post_scan_cleanup(context, objects, hidden_objects, removed_objects, modified_objects, added_objects):
     # resets object classifications, hides removed objects in viewport
     # objects from modified and added objects lists are moved to objects list
     # objects from removed objects list are moved to hidden objects list
+    change_states = [state.strip() for state in context.scene.required_change_states.split(",")]
     for _ in range(len(removed_objects)):
         obj = removed_objects.pop()
-        obj.class_name = "initial"
+        reset_change_state(context, change_states, obj)
         obj.hide_viewport = True
         for child in obj.children_recursive:
             child.hide_viewport = True
         hidden_objects.append(obj)
     for _ in range(len(modified_objects)):
         obj = modified_objects.pop()
-        obj.class_name = "initial"
+        reset_change_state(context, change_states, obj)
         objects.append(obj)
     for _ in range(len(added_objects)):
         obj = added_objects.pop()
-        obj.class_name = "initial"
+        reset_change_state(context, change_states, obj)
         objects.append(obj)
 
 
@@ -1128,6 +1131,13 @@ def reset_transforms(obj):
     obj.location[:3] = (0, 0, 0)
 
 
+# dynamic method to reset the change state of a specified object
+# requires a list of change states as input to remain dynamic
+def reset_change_state(context, change_states, obj):
+    for state in change_states:
+        setattr(obj.object_change_state, state, False)
+
+
 def build_object_collection(context):
     # builds object list of all buildings and props that can receive modifications between scans
     # modifiable objects have a corresponding tag in their object name
@@ -1135,13 +1145,14 @@ def build_object_collection(context):
     objects = []
     tags = [tag.strip() for tag in context.scene.object_modifier_tags.split(",")]
     city = bpy.data.collections[city_collection]
+    change_states = [state.strip() for state in context.scene.required_change_states.split(",")]
     for district in city.children_recursive:
         # props list is generated separately for each district
         # this is mainly done because sorting multiple shorter lists is faster
         # than sorting the longer combined list of all districts
         props = []
         for obj in district.objects:
-            obj.class_name = "initial"
+            reset_change_state(context, change_states, obj)
             obj.hide_viewport = False
             if any(tag in obj.name for tag in tags):
                 props.append(obj)
@@ -1187,19 +1198,32 @@ def bound_scan_settings(scan_settings, dataset_settings, objects):
     scan_settings.remove_objects_min = min(scan_settings.remove_objects_min, scan_settings.remove_objects_max)
 
 
-def create_missing_classes(context):
-    # creates vLiDAR classes required for classification of objects
-    required_classes = [klass.strip() for klass in context.scene.object_classes.split(",")]
-    pc_class_names = [klass.name for klass in context.scene.pointCloudRenderProperties.classes]
-    pc_classes = context.scene.pointCloudRenderProperties.classes
-    for klass in required_classes:
-        if klass not in pc_class_names:
-            bpy.ops.pcscanner.add_class()
-            pc_classes[-1].name = klass
-            pc_classes[-1].class_id = len(pc_classes) - 1
+def verify_required_change_states_available(context):
+    try:
+        change_state_panel = context.scene.panel_change_state
+    except Exception:
+        print("Unable to find required change states or change state panel provided by pointCloudRender plugin")
+        return False
+    missing_change_states = []
+    for state in [state.strip() for state in context.scene.required_change_states.split(",")]:
+        try:
+            getattr(change_state_panel, state)
+        except Exception:
+            missing_change_states.append(state)
+    if missing_change_states:
+        print(
+            "Missing the following required change states provided by pointCloudRender plugin:",
+            " ".join(missing_change_states))
+        return False
+    else:
+        return True
 
 
 def run_scans(context):
+    if not verify_required_change_states_available(context):
+        print("Aborting scan")
+        return
+
     reset_city(context)
     scan_settings = context.scene.scan_settings
     dataset_settings = context.scene.dataset_settings
@@ -1224,7 +1248,6 @@ def run_scans(context):
 
     rng = np.random.default_rng(scan_settings.seed)
     objects = build_object_collection(context)
-    create_missing_classes(context)
     bound_scan_settings(scan_settings, dataset_settings, objects)
     hidden_objects = build_hidden_object_collection(scan_settings, dataset_settings, objects, rng)
 
@@ -1258,7 +1281,7 @@ def run_scans(context):
         scanner.file_path = file_name + file_suffix
         print("-- starting scan " + str(scans + 2) + " --")
         bpy.ops.render.render_point_cloud()
-        post_scan_cleanup(objects, hidden_objects, removed_objects, modified_objects, added_objects)
+        post_scan_cleanup(context, objects, hidden_objects, removed_objects, modified_objects, added_objects)
 
 
 # ------------------------------------- #
